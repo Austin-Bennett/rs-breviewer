@@ -1,0 +1,34 @@
+# status
+[[status]]
+# the name of the status
+name = "Nominal"
+# must be a lowercase english character
+key = 'n'
+
+[[status]]
+name = "Caught up"
+key = 'c'
+
+[[status]]
+name = "Error"
+key = 'e'
+
+[[status]]
+name = "Romanian"
+key = 'r'
+
+
+
+# fields
+[[field]]
+# name of the field
+name = "oldest refresh"
+
+[[field]]
+name = "newest refresh"
+
+[[field]]
+name = "latest email"
+
+[[field]]
+name = "# keywords behind"
