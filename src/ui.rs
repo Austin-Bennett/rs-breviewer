@@ -1,5 +1,5 @@
 
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell, RefMut};
 use std::collections::{HashSet, VecDeque};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
@@ -209,7 +209,10 @@ impl<W: 'static> DynUINode for UINode<W> where for<'a> &'a W: Widget {
 // them to be reimplemented.
 impl DynUINode for UINode<TextArea<'_>> {
     fn handle_input(&mut self, key: KeyEvent) -> bool {
-        if key.code == KeyCode::Esc {
+        // Tab has no meaning inside a plain text area, so it deselects (like
+        // Esc) rather than being typed in; UITree::handle_input then moves
+        // on to the next widget in the same keystroke.
+        if key.code == KeyCode::Esc || key.code == KeyCode::Tab {
             return true;
         }
 
@@ -356,6 +359,15 @@ impl UITree {
                     if let Some(root) = &self.root {
                         root.borrow_mut().deselect();
                     }
+
+                    // a widget that has no "next" concept of its own (e.g. a
+                    // plain text area) just deselects on Tab, same as Esc;
+                    // one whose handle_input consumes Tab itself (e.g.
+                    // Reviews, moving between its own review cells) never
+                    // reports should_deselect for it, so this doesn't run.
+                    if input.code == KeyCode::Tab {
+                        self.tab_next();
+                    }
                 }
             }
         } else {
@@ -371,12 +383,50 @@ impl UITree {
                     KeyCode::Right => self.navigate(|n| n.right()),
                     KeyCode::Up => self.navigate(|n| n.up()),
                     KeyCode::Down => self.navigate(|n| n.down()),
+                    KeyCode::Tab => self.tab_next(),
                     KeyCode::Char(c) if c.to_ascii_lowercase() == 'q' => return true,
                     _ => {}
                 }
             }
         }
         false
+    }
+
+    // moves the hovered node to the "next" widget: right if there's a
+    // neighbor there, else down and then as far left as possible, else (no
+    // right or down neighbor - we're at the bottom-right of the layout)
+    // wraps around by going as far up and then as far left as possible.
+    fn tab_next(&mut self) {
+        let Some(current) = self.root.clone() else { return };
+
+        let right = current.borrow().right();
+        let next = if let Some(right) = right {
+            right
+        } else if let Some(down) = current.borrow().down() {
+            Self::furthest(down, |n| n.left())
+        } else {
+            let top = Self::furthest(current.clone(), |n| n.up());
+            Self::furthest(top, |n| n.left())
+        };
+
+        if let Some(old) = &self.root {
+            old.borrow_mut().unhover();
+        }
+        next.borrow_mut().hover();
+        self.root = Some(next);
+    }
+
+    // follows a direction from `start` repeatedly until it has no neighbor
+    // left in that direction, returning the last node reached.
+    fn furthest(start: ValidUINode, dir: impl Fn(&dyn DynUINode) -> RawUINode) -> ValidUINode {
+        let mut node = start;
+        loop {
+            let next = dir(&*node.borrow());
+            match next {
+                Some(n) => node = n,
+                None => return node,
+            }
+        }
     }
 }
 
@@ -390,6 +440,23 @@ impl UITree {
 // up the way you'd expect. If nothing satisfies that, it falls back to the
 // closest widget whose center simply lies in that direction, so irregular or
 // staggered layouts still get *something* reasonable instead of a dead end.
+// A typed, cloneable handle to a widget added to a UITreeBuilder/UITree,
+// returned by `add` alongside the type-erased node pushed into the tree.
+// Lets the caller reach back into a specific widget (e.g. to read out its
+// final contents after the input loop exits) without downcasting through
+// the tree's `dyn DynUINode` nodes.
+pub struct NodeHandle<W: 'static>(Rc<RefCell<UINode<W>>>) where for<'a> &'a W: Widget;
+
+impl<W: 'static> NodeHandle<W> where for<'a> &'a W: Widget {
+    pub fn borrow(&self) -> Ref<'_, W> {
+        Ref::map(self.0.borrow(), |n| &**n)
+    }
+
+    pub fn borrow_mut(&self) -> RefMut<'_, W> {
+        RefMut::map(self.0.borrow_mut(), |n| &mut **n)
+    }
+}
+
 pub struct UITreeBuilder {
     nodes: Vec<(ValidUINode, AreaDescription)>,
 }
@@ -399,11 +466,11 @@ impl UITreeBuilder {
         Self { nodes: Vec::new() }
     }
 
-    pub fn add<W: 'static>(mut self, widget: W, area: AreaDescription) -> Self where for<'a> &'a W: Widget {
-        let node: ValidUINode = Rc::new(RefCell::new(UINode::new(widget, area)));
+    pub fn add<W: 'static>(&mut self, widget: W, area: AreaDescription) -> NodeHandle<W> where for<'a> &'a W: Widget {
+        let node = Rc::new(RefCell::new(UINode::new(widget, area)));
         node.borrow_mut().deselect();
-        self.nodes.push((node, area));
-        self
+        self.nodes.push((node.clone() as ValidUINode, area));
+        NodeHandle(node)
     }
 
     pub fn build(self) -> UITree {

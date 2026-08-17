@@ -19,8 +19,8 @@ const CELL_HEIGHT: u16 = 4;
 const REVIEW_COLOR: Color = Color::Rgb(255, 165, 0);
 
 pub struct Review<'a> {
-    status: String,
-    message: TextArea<'a>,
+    pub status: String,
+    pub message: TextArea<'a>,
 }
 
 impl<'a> Review<'a> {
@@ -35,7 +35,7 @@ impl<'a> Review<'a> {
 
 pub struct Reviews<'a> {
     inputs: HashMap<char, String>,
-    reviews: Vec<Review<'a>>,
+    pub reviews: Vec<Review<'a>>,
     block: Block<'a>,
     // index of the first grid row currently visible
     scroll: usize,
@@ -96,7 +96,9 @@ impl<'a> Reviews<'a> {
     // than deselecting Reviews itself.
     pub fn handle_input(&mut self, key: KeyEvent) -> bool {
         if self.editing {
-            if key.code == KeyCode::Esc {
+            // Tab has no meaning inside a review's message, so - like Esc -
+            // it just stops editing that one review rather than being typed.
+            if key.code == KeyCode::Esc || key.code == KeyCode::Tab {
                 set_cursor_visible(&mut self.reviews[self.hovered].message, false);
                 self.editing = false;
             } else {
@@ -111,6 +113,7 @@ impl<'a> Reviews<'a> {
             KeyCode::Right => self.hovered = (self.hovered + 1).min(self.reviews.len().saturating_sub(1)),
             KeyCode::Up => self.scroll_up(),
             KeyCode::Down => self.scroll_down(),
+            KeyCode::Tab => self.tab_next(),
             KeyCode::Enter if !self.reviews.is_empty() => {
                 self.editing = true;
                 set_cursor_visible(&mut self.reviews[self.hovered].message, true);
@@ -124,6 +127,7 @@ impl<'a> Reviews<'a> {
                 let c = c.to_ascii_lowercase();
 
                 if let Some(status) = self.inputs.get(&c) {
+
                     self.reviews.push(Review::new(status.clone()))
                 }
             }
@@ -131,6 +135,17 @@ impl<'a> Reviews<'a> {
         }
 
         false
+    }
+
+    // moves the hovered review to the "next" one in reading order. Reviews
+    // render in row-major order (see Widget::render below), so the "right,
+    // else down-and-leftmost, else wrap to up-and-leftmost" rule used
+    // elsewhere reduces to just advancing the flat index and wrapping at
+    // the end.
+    fn tab_next(&mut self) {
+        if !self.reviews.is_empty() {
+            self.hovered = (self.hovered + 1) % self.reviews.len();
+        }
     }
 
     // how many grid columns/rows fit in an area this wide/tall
